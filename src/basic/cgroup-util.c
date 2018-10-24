@@ -2314,8 +2314,10 @@ int cg_mask_to_string(CGroupMask mask, char **ret) {
         return 0;
 }
 
-int cg_mask_from_string(const char *value, CGroupMask *mask) {
-        assert(mask);
+int cg_mask_from_string(const char *value, CGroupMask *ret) {
+        CGroupMask m = 0;
+
+        assert(ret);
         assert(value);
 
         for (;;) {
@@ -2333,13 +2335,15 @@ int cg_mask_from_string(const char *value, CGroupMask *mask) {
                 if (v < 0)
                         continue;
 
-                *mask |= CGROUP_CONTROLLER_TO_MASK(v);
+                m |= CGROUP_CONTROLLER_TO_MASK(v);
         }
+
+        *ret = m;
         return 0;
 }
 
 int cg_mask_supported(CGroupMask *ret) {
-        CGroupMask mask = 0;
+        CGroupMask mask;
         int r;
 
         /* Determines the mask of supported cgroup controllers. Only
@@ -2383,6 +2387,7 @@ int cg_mask_supported(CGroupMask *ret) {
                 /* In the legacy hierarchy, we check whether which
                  * hierarchies are mounted. */
 
+                mask = 0;
                 for (c = 0; c < _CGROUP_CONTROLLER_MAX; c++) {
                         const char *n;
 
