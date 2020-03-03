@@ -2353,10 +2353,10 @@ int cg_mask_supported(CGroupMask *ret) {
                 if (r < 0)
                         return r;
 
-                /* Currently, we support the cpu, memory, io and pids
+                /* Currently, we support the cpu, memory, io, pids and cpuset
                  * controller in the unified hierarchy, mask
                  * everything else off. */
-                mask &= CGROUP_MASK_CPU | CGROUP_MASK_MEMORY | CGROUP_MASK_IO | CGROUP_MASK_PIDS;
+                mask &= CGROUP_MASK_CPU | CGROUP_MASK_MEMORY | CGROUP_MASK_IO | CGROUP_MASK_PIDS | CGROUP_MASK_CPUSET;
 
         } else {
                 CGroupController c;
