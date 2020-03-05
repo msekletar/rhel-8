@@ -2367,6 +2367,9 @@ int cg_mask_supported(CGroupMask *ret) {
                 for (c = 0; c < _CGROUP_CONTROLLER_MAX; c++) {
                         const char *n;
 
+                        if (c == CGROUP_CONTROLLER_CPUSET)
+                                continue;
+
                         n = cgroup_controller_to_string(c);
                         if (controller_is_accessible(n) >= 0)
                                 mask |= CGROUP_CONTROLLER_TO_MASK(c);
