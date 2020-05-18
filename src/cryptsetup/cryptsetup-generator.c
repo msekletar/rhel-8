@@ -40,13 +40,13 @@ static Hashmap *arg_disks = NULL;
 static char *arg_default_options = NULL;
 static char *arg_default_keyfile = NULL;
 
-static int generate_keydev_mount(const char *name, const char *keydev, char **unit, char **mount) {
+static int generate_dev_mount(const char *name, const char *dev, const char *type_prefix, bool readonly, char **unit, char **mount) {
         _cleanup_free_ char *u = NULL, *what = NULL, *where = NULL, *name_escaped = NULL;
         _cleanup_fclose_ FILE *f = NULL;
         int r;
 
         assert(name);
-        assert(keydev);
+        assert(dev);
         assert(unit);
         assert(mount);
 
@@ -62,7 +62,7 @@ static int generate_keydev_mount(const char *name, const char *keydev, char **un
         if (!name_escaped)
                 return -ENOMEM;
 
-        where = strjoin("/run/systemd/cryptsetup/keydev-", name_escaped);
+        where = strjoin("/run/systemd/cryptsetup/", type_prefix, "-", name_escaped);
         if (!where)
                 return -ENOMEM;
 
@@ -78,7 +78,7 @@ static int generate_keydev_mount(const char *name, const char *keydev, char **un
         if (r < 0)
                 return r;
 
-        what = fstab_node_to_udev_node(keydev);
+        what = fstab_node_to_udev_node(dev);
         if (!what)
                 return -ENOMEM;
 
@@ -88,7 +88,7 @@ static int generate_keydev_mount(const char *name, const char *keydev, char **un
                 "[Mount]\n"
                 "What=%s\n"
                 "Where=%s\n"
-                "Options=ro\n", what, where);
+                "Options=%s\n", what, where, readonly ? "ro" : "rw");
 
         r = fflush_and_check(f);
         if (r < 0)
@@ -181,7 +181,7 @@ static int create_disk(
         if (keydev) {
                 _cleanup_free_ char *unit = NULL, *p = NULL;
 
-                r = generate_keydev_mount(name, keydev, &unit, &keydev_mount);
+                r = generate_dev_mount(name, keydev, "keydev", true, &unit, &keydev_mount);
                 if (r < 0)
                         return log_error_errno(r, "Failed to generate keydev mount unit: %m");
 
