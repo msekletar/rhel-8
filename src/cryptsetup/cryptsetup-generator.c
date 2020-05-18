@@ -27,6 +27,8 @@ typedef struct crypto_device {
         char *uuid;
         char *keyfile;
         char *keydev;
+        char *hdrdev;
+        char *datadev;
         char *name;
         char *options;
         bool create;
@@ -145,11 +147,13 @@ static int create_disk(
                 const char *name,
                 const char *device,
                 const char *keydev,
+                const char *hdrdev,
                 const char *password,
                 const char *options) {
 
         _cleanup_free_ char *n = NULL, *d = NULL, *u = NULL, *e = NULL,
-                *filtered = NULL, *u_escaped = NULL, *password_escaped = NULL, *filtered_escaped = NULL, *name_escaped = NULL, *keydev_mount = NULL, *header_path = NULL;
+                *filtered = NULL, *u_escaped = NULL, *password_escaped = NULL, *filtered_escaped = NULL, *name_escaped = NULL, *keydev_mount = NULL, *header_path = NULL,
+                *filtered_header = NULL, *hdrdev_mount = NULL;
         _cleanup_fclose_ FILE *f = NULL;
         const char *dmname;
         bool noauto, nofail, tmp, swap, netdev;
@@ -164,7 +168,7 @@ static int create_disk(
         swap = fstab_test_option(options, "swap\0");
         netdev = fstab_test_option(options, "_netdev\0");
 
-        detached_header = fstab_filter_options(options, "header\0", NULL, &header_path, NULL);
+        detached_header = fstab_filter_options(options, "header\0", NULL, &header_path, hdrdev ? &filtered_header : NULL);
         if (detached_header < 0)
                 return log_error_errno(detached_header, "Failed to parse header= option value: %m");
 
@@ -206,6 +210,9 @@ static int create_disk(
                 return -EINVAL;
         }
 
+        if (hdrdev && !detached_header)
+                return log_error("Header device is specified, but path to the header file is missing.");
+
         r = generator_open_unit_file(arg_dest, NULL, n, &f);
         if (r < 0)
                 return r;
@@ -233,6 +240,34 @@ static int create_disk(
                         return log_oom();
 
                 free_and_replace(password_escaped, p);
+
+                fprintf(f, "After=%s\n"
+                           "Requires=%s\n", unit, unit);
+        }
+
+        if (hdrdev) {
+                _cleanup_free_ char *unit = NULL, *p = NULL;
+
+                /* header device timeout does not make sense, rw access is required for LUKS2 recovery  */
+                r = generate_dev_mount(name, hdrdev, "hdrdev", false, &unit, &hdrdev_mount);
+                if (r < 0)
+                        return log_error_errno(r, "Failed to generate hdrdev mount unit: %m");
+
+                p = path_join(NULL, hdrdev_mount, header_path);
+                if (!p)
+                        return log_oom();
+
+                free_and_replace(header_path, p);
+
+                p = strjoin(filtered_header, *filtered_header ? ",header=" : "header=", header_path);
+                if (!p)
+                        return log_oom();
+
+                free_and_replace(filtered_header, p);
+                options = filtered_header;
+
+                fprintf(f, "After=%s\n"
+                           "Requires=%s\n", unit, unit);
         }
 
         if (!nofail)
@@ -247,7 +282,7 @@ static int create_disk(
         }
 
         /* Check if a header option was specified */
-        if (detached_header > 0) {
+        if (detached_header > 0 && !hdrdev) {
                 r = print_dependencies(f, header_path);
                 if (r < 0)
                         return r;
@@ -468,6 +503,68 @@ static int parse_proc_cmdline_item(const char *key, const char *value, void *dat
 
                 free_and_replace(d->keyfile, keyfile);
                 free_and_replace(d->keydev, keydev);
+        } else if (streq(key, "luks.hdr")) {
+                 size_t n;
+                 _cleanup_free_ char *hdrdev = NULL;
+
+                 if (proc_cmdline_value_missing(key, value))
+                         return 0;
+
+                 n = strspn(value, ALPHANUMERICAL "-");
+                 if (value[n] != '=') {
+                         log_warning("Failed to parse luks.hdr= kernel command line switch. UUID is invalid, ignoring.");
+                         return 0;
+                 }
+
+                 uuid = strndup(value, n);
+                 if (!uuid)
+                         return log_oom();
+
+                 if (!id128_is_valid(uuid)) {
+                         log_warning("Failed to parse luks.hdr= kernel command line switch. UUID is invalid, ignoring.");
+                         return 0;
+                 }
+
+                 d = get_crypto_device(uuid);
+                 if (!d)
+                         return log_oom();
+
+                 hdrdev = fstab_node_to_udev_node(value + n + 1);
+                 if (!hdrdev)
+                         return log_oom();
+
+                 free_and_replace(d->hdrdev, hdrdev);
+         } else if (streq(key, "luks.data")) {
+                 size_t n;
+                 _cleanup_free_ char *datadev = NULL;
+
+                 if (proc_cmdline_value_missing(key, value))
+                         return 0;
+
+                 n = strspn(value, ALPHANUMERICAL "-");
+                 if (value[n] != '=') {
+                         log_warning("Failed to parse luks.data= kernel command line switch. UUID is invalid, ignoring.");
+                         return 0;
+                 }
+
+                 uuid = strndup(value, n);
+                 if (!uuid)
+                         return log_oom();
+
+                 if (!id128_is_valid(uuid)) {
+                         log_warning("Failed to parse luks.data= kernel command line switch. UUID is invalid, ignoring.");
+                         return 0;
+                 }
+
+                 d = get_crypto_device(uuid);
+                 if (!d)
+                         return log_oom();
+
+                 datadev = fstab_node_to_udev_node(value + n + 1);
+                 if (!datadev)
+                         return log_oom();
+
+                 free_and_replace(d->datadev, datadev);
         } else if (streq(key, "luks.name")) {
 
                 if (proc_cmdline_value_missing(key, value))
@@ -545,7 +642,7 @@ static int add_crypttab_devices(void) {
                         continue;
                 }
 
-                r = create_disk(name, device, NULL, keyfile, (d && d->options) ? d->options : options);
+                r = create_disk(name, device, NULL, NULL, keyfile, (d && d->options) ? d->options : options);
                 if (r < 0)
                         return r;
 
@@ -585,7 +682,7 @@ static int add_proc_cmdline_devices(void) {
                 else
                         options = "timeout=0";
 
-                r = create_disk(d->name, device, d->keydev, d->keyfile ?: arg_default_keyfile, options);
+                r = create_disk(d->name, d->datadev ?: device, d->keydev, d->hdrdev, d->keyfile ?: arg_default_keyfile, options);
                 if (r < 0)
                         return r;
         }
